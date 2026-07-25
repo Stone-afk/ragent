@@ -33,6 +33,7 @@ export interface KnowledgeDocument {
   updatedBy?: string | null;
   createTime?: string | null;
   updateTime?: string | null;
+  chunksEdited?: boolean | null;
 }
 
 export interface KnowledgeChunk {
@@ -326,6 +327,17 @@ export const batchToggleChunks = async (
     { chunkIds },
     { params: { value: enabled } }
   );
+};
+
+export const previewDocument = async (docId: string): Promise<string> => {
+  return api.get<unknown, string>(`/knowledge-base/docs/${docId}/preview`);
+};
+
+// 拉取文档源文件二进制(带鉴权)，用于 xlsx 在线预览 / csv 解码
+export const fetchDocumentFile = async (docId: string): Promise<ArrayBuffer> => {
+  return api.get<unknown, ArrayBuffer>(`/knowledge-base/docs/${docId}/file`, {
+    responseType: "arraybuffer"
+  });
 };
 
 // 文档分块日志管理

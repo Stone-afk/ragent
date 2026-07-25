@@ -72,6 +72,11 @@ CREATE TABLE t_message (
     content           TEXT        NOT NULL,
     thinking_content  TEXT,
     thinking_duration INTEGER,
+    sources              JSONB,
+    recommended_questions JSONB,
+    retrieved_chunks  JSONB,
+    reply_to_message_id VARCHAR(20),
+    message_status    VARCHAR(16) NOT NULL DEFAULT 'NORMAL',
     create_time       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     update_time       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted           SMALLINT    DEFAULT 0
@@ -108,6 +113,52 @@ CREATE TABLE t_sample_question (
 );
 CREATE INDEX idx_sample_question_deleted ON t_sample_question (deleted);
 COMMENT ON TABLE t_sample_question IS '示例问题表';
+
+-- ============================================
+-- Business Change Audit Tables
+-- ============================================
+
+CREATE TABLE t_biz_change_log (
+    id               VARCHAR(20)  NOT NULL PRIMARY KEY,
+    biz_type         VARCHAR(64)  NOT NULL,
+    biz_id           VARCHAR(64)  NOT NULL,
+    operation_type   VARCHAR(32)  NOT NULL,
+    action_desc      VARCHAR(512),
+    before_snapshot  JSONB,
+    after_snapshot   JSONB,
+    change_diff      JSONB,
+    operator_id      VARCHAR(64),
+    operator_name    VARCHAR(128),
+    operator_role    VARCHAR(64),
+    success          BOOLEAN      NOT NULL DEFAULT TRUE,
+    error_message    TEXT,
+    class_name       VARCHAR(255),
+    method_name      VARCHAR(255),
+    ip               VARCHAR(64),
+    user_agent       VARCHAR(512),
+    create_time      TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_biz_change_log_biz ON t_biz_change_log (biz_type, biz_id);
+CREATE INDEX idx_biz_change_log_time ON t_biz_change_log (create_time);
+CREATE INDEX idx_biz_change_log_operator ON t_biz_change_log (operator_id);
+COMMENT ON TABLE t_biz_change_log IS '业务数据变更审计日志表';
+COMMENT ON COLUMN t_biz_change_log.biz_type IS '业务对象类型';
+COMMENT ON COLUMN t_biz_change_log.biz_id IS '业务对象主键';
+COMMENT ON COLUMN t_biz_change_log.operation_type IS '操作类型';
+COMMENT ON COLUMN t_biz_change_log.action_desc IS '操作描述';
+COMMENT ON COLUMN t_biz_change_log.before_snapshot IS '变更前快照';
+COMMENT ON COLUMN t_biz_change_log.after_snapshot IS '变更后快照';
+COMMENT ON COLUMN t_biz_change_log.change_diff IS '变更差异';
+COMMENT ON COLUMN t_biz_change_log.operator_id IS '操作人ID';
+COMMENT ON COLUMN t_biz_change_log.operator_name IS '操作人名称';
+COMMENT ON COLUMN t_biz_change_log.operator_role IS '操作人角色';
+COMMENT ON COLUMN t_biz_change_log.success IS '是否成功';
+COMMENT ON COLUMN t_biz_change_log.error_message IS '失败信息';
+COMMENT ON COLUMN t_biz_change_log.class_name IS '触发类名';
+COMMENT ON COLUMN t_biz_change_log.method_name IS '触发方法名';
+COMMENT ON COLUMN t_biz_change_log.ip IS '来源IP';
+COMMENT ON COLUMN t_biz_change_log.user_agent IS 'User-Agent';
+COMMENT ON COLUMN t_biz_change_log.create_time IS '创建时间';
 
 -- ============================================
 -- Knowledge Base Tables
@@ -420,16 +471,19 @@ COMMENT ON TABLE t_ingestion_task_node IS '摄取任务节点表';
 -- ============================================
 
 CREATE TABLE t_knowledge_vector (
-    id          VARCHAR(20) PRIMARY KEY,
-    content     TEXT,
-    metadata    JSONB,
-    embedding   vector(1536)
+    id              VARCHAR(20) PRIMARY KEY,
+    collection_name VARCHAR(64) NOT NULL,
+    content         TEXT,
+    metadata        JSONB,
+    embedding       vector(1536)
 );
 
+CREATE INDEX idx_kv_collection_name ON t_knowledge_vector (collection_name);
 CREATE INDEX idx_kv_metadata ON t_knowledge_vector USING gin(metadata);
 CREATE INDEX idx_kv_embedding ON t_knowledge_vector USING hnsw (embedding vector_cosine_ops);
 COMMENT ON TABLE t_knowledge_vector IS '知识库向量存储表';
 COMMENT ON COLUMN t_knowledge_vector.id IS '分块ID';
+COMMENT ON COLUMN t_knowledge_vector.collection_name IS '知识库Collection';
 COMMENT ON COLUMN t_knowledge_vector.content IS '分块文本内容';
 COMMENT ON COLUMN t_knowledge_vector.metadata IS '元数据';
 COMMENT ON COLUMN t_knowledge_vector.embedding IS '向量';
@@ -456,6 +510,11 @@ COMMENT ON COLUMN t_message.role IS '角色：user/assistant';
 COMMENT ON COLUMN t_message.content IS '消息内容';
 COMMENT ON COLUMN t_message.thinking_content IS '深度思考内容';
 COMMENT ON COLUMN t_message.thinking_duration IS '深度思考耗时（秒）';
+COMMENT ON COLUMN t_message.sources IS '回答来源';
+COMMENT ON COLUMN t_message.recommended_questions IS '推荐追问问题';
+COMMENT ON COLUMN t_message.retrieved_chunks IS '推荐问题 grounding 片段';
+COMMENT ON COLUMN t_message.reply_to_message_id IS '当前助手消息对应的用户消息ID';
+COMMENT ON COLUMN t_message.message_status IS '消息结束状态：NORMAL=正常完成，INTERRUPTED=用户中断，REJECTED=限流拒绝';
 COMMENT ON COLUMN t_message.create_time IS '创建时间';
 COMMENT ON COLUMN t_message.update_time IS '更新时间';
 COMMENT ON COLUMN t_message.deleted IS '是否删除 0：正常 1：删除';

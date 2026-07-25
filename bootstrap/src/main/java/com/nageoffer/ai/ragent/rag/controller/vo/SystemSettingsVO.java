@@ -101,9 +101,20 @@ public class SystemSettingsVO {
         @Data
         @Builder
         public static class ModelGroup {
+            // defaultModel 供 embedding/rerank/vlm 使用；chat 组走档位（tiers）字段
             private String defaultModel;
-            private String deepThinkingModel;
             private List<ModelCandidate> candidates;
+            // 以下为 chat 组档位机制字段，embedding/rerank/vlm 为 null
+            private String defaultTier;
+            private String deepThinkingTier;
+            private Map<String, TierConfig> tiers;
+        }
+
+        @Data
+        @Builder
+        public static class TierConfig {
+            private List<String> candidates;
+            private Long timeoutMs;
         }
 
         @Data
@@ -145,7 +156,6 @@ public class SystemSettingsVO {
     @Builder
     public static class MemorySettings {
         private Integer historyKeepTurns;
-        private Integer ttlMinutes;
         private Boolean summaryEnabled;
         private Integer summaryStartTurns;
         private Integer summaryMaxChars;
@@ -209,13 +219,9 @@ public class SystemSettingsVO {
     @Getter
     public static class QueryRewriteSettings {
         private Boolean enabled;
-        private Integer maxHistoryMessages;
-        private Integer maxHistoryChars;
 
-        public QueryRewriteSettings(Boolean enabled, Integer maxHistoryMessages, Integer maxHistoryChars) {
+        public QueryRewriteSettings(Boolean enabled) {
             this.enabled = enabled;
-            this.maxHistoryMessages = maxHistoryMessages;
-            this.maxHistoryChars = maxHistoryChars;
         }
 
         public static QueryRewriteSettingsBuilder builder() {
@@ -224,26 +230,14 @@ public class SystemSettingsVO {
 
         public static class QueryRewriteSettingsBuilder {
             private Boolean enabled;
-            private Integer maxHistoryMessages;
-            private Integer maxHistoryChars;
 
             public QueryRewriteSettingsBuilder enabled(Boolean enabled) {
                 this.enabled = enabled;
                 return this;
             }
 
-            public QueryRewriteSettingsBuilder maxHistoryMessages(Integer maxHistoryMessages) {
-                this.maxHistoryMessages = maxHistoryMessages;
-                return this;
-            }
-
-            public QueryRewriteSettingsBuilder maxHistoryChars(Integer maxHistoryChars) {
-                this.maxHistoryChars = maxHistoryChars;
-                return this;
-            }
-
             public QueryRewriteSettings build() {
-                return new QueryRewriteSettings(enabled, maxHistoryMessages, maxHistoryChars);
+                return new QueryRewriteSettings(enabled);
             }
         }
     }

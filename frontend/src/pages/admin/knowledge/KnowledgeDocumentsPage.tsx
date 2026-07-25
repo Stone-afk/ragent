@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Check, FileUp, FolderOpen, PlayCircle, RefreshCw, Trash2, Pencil, FileBarChart, X } from "lucide-react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Check, FileUp, FileImage, PlayCircle, RefreshCw, Trash2, Pencil, FileBarChart, X, Eye, MoreHorizontal, FileText, FileSpreadsheet, Link as LinkIcon, Download } from "lucide-react";
 import { toast } from "sonner";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -11,11 +11,15 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { RelativeTime } from "@/components/RelativeTime";
+import { formatFullDateTime } from "@/utils/time";
 
 import type { KnowledgeBase, KnowledgeDocument, KnowledgeDocumentUploadPayload, KnowledgeDocumentChunkLog, PageResult, ChunkStrategyOption } from "@/services/knowledgeService";
 import {
@@ -28,10 +32,12 @@ import {
   startDocumentChunk,
   uploadDocument,
   getChunkStrategies,
-  getChunkLogsPage
+  getChunkLogsPage,
+  fetchDocumentFile
 } from "@/services/knowledgeService";
 import { getIngestionPipelines, type IngestionPipeline } from "@/services/ingestionService";
 import { getSystemSettings } from "@/services/settingsService";
+import { DocumentPreview, isImageType, isSpreadsheetType } from "@/components/document/DocumentPreview";
 import { getErrorMessage } from "@/utils/error";
 
 const PAGE_SIZE = 10;
@@ -78,19 +84,12 @@ const statusDotClass = (status?: string | null) => {
   return "bg-muted-foreground/40";
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("zh-CN");
-};
-
 const formatSize = (size?: number | null) => {
   if (!size && size !== 0) return "-";
   if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (size < 1024 * 1024) return `${parseFloat((size / 1024).toFixed(1))} KB`;
+  if (size < 1024 * 1024 * 1024) return `${parseFloat((size / 1024 / 1024).toFixed(1))} MB`;
+  return `${parseFloat((size / 1024 / 1024 / 1024).toFixed(1))} GB`;
 };
 
 const formatSourceLabel = (sourceType?: string | null) => {
@@ -100,6 +99,40 @@ const formatSourceLabel = (sourceType?: string | null) => {
   return "-";
 };
 
+const ProcessModeCell = ({ doc, pipelineMap }: { doc: KnowledgeDocument; pipelineMap: Map<string, string> }) => {
+  const mode = doc.processMode?.toLowerCase();
+  if (mode === "chunk") {
+    const detail = doc.chunkStrategy ? formatChunkStrategy(doc.chunkStrategy) : null;
+    const trigger = <span className="cursor-default text-sm">Chunk</span>;
+    if (!detail) return trigger;
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+          <TooltipContent><p>策略：{detail}</p></TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  if (mode === "pipeline") {
+    const pid = doc.pipelineId ? String(doc.pipelineId) : null;
+    const name = pid ? pipelineMap.get(pid) : null;
+    return (
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="cursor-default text-sm">Data Pipeline</span>
+          </TooltipTrigger>
+          {name ? (
+            <TooltipContent><p>{name}</p></TooltipContent>
+          ) : null}
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+  return <span className="text-muted-foreground/35 text-sm">-</span>;
+};
+
 const formatChunkStrategy = (strategy?: string | null) => {
   const normalized = strategy?.toLowerCase();
   if (normalized === "fixed_size") return "固定大小";
@@ -107,12 +140,57 @@ const formatChunkStrategy = (strategy?: string | null) => {
   return strategy || "-";
 };
 
+// 表格类文件：走 block-aware 按行切分 + key-val 嵌入，配置面板只暴露真正生效的参数
+const TABLE_FILE_EXTS = ["xlsx", "xls", "csv"];
+const extOf = (name?: string | null) => name?.split(".").pop()?.toLowerCase() ?? "";
+const isTableExt = (ext?: string | null) => !!ext && TABLE_FILE_EXTS.includes(ext.toLowerCase());
+
+const FILE_TYPE_MAP: Record<string, { icon: typeof FileText; color: string }> = {
+  pdf:         { icon: FileText, color: "text-red-500" },
+  markdown:    { icon: FileText, color: "text-blue-500" },
+  md:          { icon: FileText, color: "text-blue-500" },
+  doc:         { icon: FileText, color: "text-blue-600" },
+  docx:        { icon: FileText, color: "text-blue-600" },
+  txt:         { icon: FileText, color: "text-slate-500" },
+  xlsx:        { icon: FileSpreadsheet, color: "text-green-600" },
+  xls:         { icon: FileSpreadsheet, color: "text-green-600" },
+  csv:         { icon: FileSpreadsheet, color: "text-emerald-500" },
+  image:       { icon: FileImage, color: "text-emerald-500" },
+  png:         { icon: FileImage, color: "text-emerald-500" },
+  jpg:         { icon: FileImage, color: "text-emerald-500" },
+  jpeg:        { icon: FileImage, color: "text-emerald-500" },
+  gif:         { icon: FileImage, color: "text-emerald-500" },
+  webp:        { icon: FileImage, color: "text-emerald-500" },
+  svg:         { icon: FileImage, color: "text-emerald-500" },
+};
+
+const renderFileTypeIcon = (fileType?: string | null, sourceType?: string | null) => {
+  const type = fileType?.toLowerCase();
+  if (type && FILE_TYPE_MAP[type]) {
+    const { icon: Icon, color } = FILE_TYPE_MAP[type];
+    return <Icon className={`h-4 w-4 shrink-0 ${color}`} />;
+  }
+  if (sourceType?.toLowerCase() === "url") {
+    return <LinkIcon className="h-4 w-4 shrink-0 text-purple-500" />;
+  }
+  return <FileText className="h-4 w-4 shrink-0 text-slate-400" />;
+};
+
 export function KnowledgeDocumentsPage() {
   const { kbId } = useParams();
   const navigate = useNavigate();
   const [kb, setKb] = useState<KnowledgeBase | null>(null);
   const [pageData, setPageData] = useState<PageResult<KnowledgeDocument> | null>(null);
-  const [current, setCurrent] = useState(1);
+  // 页码塞进 history state（不进 URL，保持 RESTful 路径），离开分块页 navigate(-1) 返回时自动恢复
+  const location = useLocation();
+  const current = Math.max(1, Number((location.state as { page?: number } | null)?.page) || 1);
+  const setCurrent = (next: number | ((prev: number) => number)) => {
+    const value = typeof next === "function" ? next(current) : next;
+    navigate(location.pathname, {
+      replace: true,
+      state: { ...(location.state as object | null), page: value }
+    });
+  };
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [keyword, setKeyword] = useState("");
@@ -137,8 +215,77 @@ export function KnowledgeDocumentsPage() {
   const [logTarget, setLogTarget] = useState<KnowledgeDocument | null>(null);
   const [logData, setLogData] = useState<PageResult<KnowledgeDocumentChunkLog> | null>(null);
   const [logLoading, setLogLoading] = useState(false);
+  const [previewTarget, setPreviewTarget] = useState<KnowledgeDocument | null>(null);
 
   const documents = pageData?.records || [];
+  const [pipelineMap, setPipelineMap] = useState<Map<string, string>>(new Map());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchOperating, setBatchOperating] = useState(false);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    getIngestionPipelines(1, 200).then(r => {
+      const map = new Map<string, string>();
+      (r.records || []).forEach(p => map.set(String(p.id), p.name));
+      setPipelineMap(map);
+    }).catch(() => {});
+  }, []);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (documents.length === 0) return;
+    if (selectedIds.size === documents.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(documents.map((d) => String(d.id))));
+    }
+  };
+
+  const handleBatchChunk = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchOperating(true);
+    let done = 0;
+    try {
+      for (const id of selectedIds) {
+        await startDocumentChunk(id);
+        done++;
+      }
+      toast.success(`已触发 ${done} 个文档分块`);
+      setSelectedIds(new Set());
+      await loadDocuments(current, statusFilter, keyword);
+    } catch (error) {
+      toast.error(getErrorMessage(error, `已处理 ${done}/${selectedIds.size}，操作中断`));
+    } finally {
+      setBatchOperating(false);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.size === 0) return;
+    setBatchOperating(true);
+    let done = 0;
+    try {
+      for (const id of selectedIds) {
+        await deleteDocument(id);
+        done++;
+      }
+      toast.success(`已删除 ${done} 个文档`);
+      setSelectedIds(new Set());
+      setCurrent(1);
+      await loadDocuments(1, statusFilter, keyword);
+    } catch (error) {
+      toast.error(getErrorMessage(error, `已处理 ${done}/${selectedIds.size}，操作中断`));
+    } finally {
+      setBatchOperating(false);
+    }
+  };
 
   const loadKnowledgeBase = async () => {
     if (!kbId) return;
@@ -232,8 +379,7 @@ export function KnowledgeDocumentsPage() {
   };
 
   const handleRefresh = () => {
-    setCurrent(1);
-    loadDocuments(1, statusFilter, keyword);
+    loadDocuments(current, statusFilter, keyword);
   };
 
   const handleDelete = async () => {
@@ -289,15 +435,29 @@ export function KnowledgeDocumentsPage() {
         processMode: detailProcessMode,
       };
       if (detailProcessMode === "chunk") {
-        data.chunkStrategy = detailChunkStrategy;
-        // 根据策略的 defaultConfig keys 组装 chunkConfig JSON
-        const strategy = detailStrategies.find(s => s.value === detailChunkStrategy);
-        if (strategy) {
-          const configObj: Record<string, number> = {};
-          for (const key of Object.keys(strategy.defaultConfig)) {
-            configObj[key] = Number(detailConfigValues[key]) || strategy.defaultConfig[key];
+        if (isDetailTable) {
+          // fixed_size 载体 + 表格 block-aware 自由键（rowsPerChunk / excelParser）
+          data.chunkStrategy = "fixed_size";
+          const configObj: Record<string, number | string> = {
+            chunkSize: Number(detailConfigValues["chunkSize"]) || 512,
+            overlapSize: 0,
+            rowsPerChunk: Number(detailConfigValues["rowsPerChunk"]) || 50
+          };
+          if (!isDetailCsv) {
+            configObj.excelParser = detailConfigValues["excelParser"] || "poi";
           }
           data.chunkConfig = JSON.stringify(configObj);
+        } else {
+          data.chunkStrategy = detailChunkStrategy;
+          // 根据策略的 defaultConfig keys 组装 chunkConfig JSON
+          const strategy = detailStrategies.find(s => s.value === detailChunkStrategy);
+          if (strategy) {
+            const configObj: Record<string, number> = {};
+            for (const key of Object.keys(strategy.defaultConfig)) {
+              configObj[key] = Number(detailConfigValues[key]) || strategy.defaultConfig[key];
+            }
+            data.chunkConfig = JSON.stringify(configObj);
+          }
         }
       } else {
         data.pipelineId = detailPipelineId;
@@ -342,6 +502,30 @@ export function KnowledgeDocumentsPage() {
     loadChunkLogs(String(doc.id));
   };
 
+  const handlePreview = (doc: KnowledgeDocument) => {
+    setPreviewTarget(doc);
+  };
+
+  const handleDownload = async (doc: KnowledgeDocument) => {
+    try {
+      const buffer = await fetchDocumentFile(String(doc.id));
+      const blob = new Blob([buffer]);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      // docName 通常已含扩展名，仅在完全没有后缀时才按 fileType 补全
+      const name = doc.docName || `document-${doc.id}`;
+      const hasExt = /\.[^./\\]+$/.test(name);
+      anchor.download = !hasExt && doc.fileType ? `${name}.${doc.fileType.toLowerCase()}` : name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(getErrorMessage(error, "下载失败"));
+    }
+  };
+
   const formatDuration = (ms?: number | null) => {
     if (!ms && ms !== 0) return "-";
     if (ms < 1000) return `${ms}ms`;
@@ -358,6 +542,10 @@ export function KnowledgeDocumentsPage() {
   const detailSourceType = detailTarget?.sourceType?.toLowerCase();
   const detailIsUrlSource = detailSourceType === "url";
   const detailNameLabel = detailIsUrlSource ? "文档名称" : "本地文件";
+  // 表格类文档（用后端返回的 fileType 判定）：配置区切到表格专属项
+  const detailFileType = detailTarget?.fileType?.toLowerCase();
+  const isDetailTable = isTableExt(detailFileType);
+  const isDetailCsv = detailFileType === "csv";
 
   // 当策略切换时，用默认值填充配置
   const handleDetailStrategyChange = (value: string) => {
@@ -470,46 +658,64 @@ export function KnowledgeDocumentsPage() {
           ) : documents.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">暂无文档</div>
           ) : (
-            <Table className="min-w-[1120px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[260px]">文档</TableHead>
-                  <TableHead className="w-[120px]">来源</TableHead>
-                  <TableHead className="w-[120px]">处理模式</TableHead>
-                  <TableHead className="w-[120px]">状态</TableHead>
-                  <TableHead className="w-[80px]">启用</TableHead>
-                  <TableHead className="w-[90px]">分块数</TableHead>
-                  <TableHead className="w-[90px]">类型</TableHead>
-                  <TableHead className="w-[90px]">大小</TableHead>
-                  <TableHead className="w-[170px]">更新时间</TableHead>
-                  <TableHead className="w-[160px] text-left">操作</TableHead>
-                </TableRow>
-              </TableHeader>
+            <Table className="min-w-[910px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[40px]">
+                      <Checkbox
+                        checked={documents.length > 0 && selectedIds.size === documents.length}
+                        onCheckedChange={toggleSelectAll}
+                      />
+                    </TableHead>
+                    <TableHead className="w-[280px]">文档</TableHead>
+                    <TableHead className="w-[110px]">状态</TableHead>
+                    <TableHead className="w-[70px]">启用</TableHead>
+                    <TableHead className="w-[80px]">分块数</TableHead>
+                    <TableHead className="w-[120px]">处理模式</TableHead>
+                    <TableHead className="w-[170px]">更新时间</TableHead>
+                    <TableHead className="w-[170px] text-left">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
               <TableBody>
                 {documents.map((doc) => (
                   <TableRow key={doc.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex min-w-0 max-w-[280px] items-center gap-2">
-                        <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                        <button
-                          type="button"
-                          className="admin-link flex-1 min-w-0 text-left"
-                          title={doc.docName || ""}
-                          onClick={() => navigate(`/admin/knowledge/${kbId}/docs/${doc.id}`)}
-                        >
-                          <span className="flex-1 min-w-0 truncate">{doc.docName || "-"}</span>
-                        </button>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(String(doc.id))}
+                        onCheckedChange={() => toggleSelect(String(doc.id))}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2.5 min-w-0 max-w-[320px]">
+                        {renderFileTypeIcon(doc.fileType, doc.sourceType)}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <button
+                              type="button"
+                              className="block truncate min-w-0 text-left font-medium text-slate-900 transition-colors hover:text-indigo-600 hover:underline underline-offset-4"
+                              title={doc.docName || ""}
+                              onClick={() => navigate(`/admin/knowledge/${kbId}/docs/${doc.id}`)}
+                            >
+                              {doc.docName || "-"}
+                            </button>
+                            {doc.chunksEdited ? (
+                              <span
+                                className="shrink-0 rounded-full bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-amber-200"
+                                title="该文档存在被手工编辑过的分块，重新分块会丢失"
+                              >
+                                已编辑
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {[
+                              doc.fileType,
+                              doc.fileSize ? formatSize(doc.fileSize) : null,
+                              doc.sourceType ? formatSourceLabel(doc.sourceType) : null,
+                            ].filter(Boolean).join(" · ")}
+                          </div>
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-xs text-muted-foreground">
-                        {formatSourceLabel(doc.sourceType)}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-xs text-muted-foreground">
-                        {doc.processMode || "-"}
-                      </span>
                     </TableCell>
                     <TableCell>
                       <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
@@ -542,15 +748,34 @@ export function KnowledgeDocumentsPage() {
                         );
                       })()}
                     </TableCell>
-                    <TableCell>{doc.chunkCount ?? "-"}</TableCell>
-                    <TableCell>{doc.fileType || "-"}</TableCell>
-                    <TableCell>{formatSize(doc.fileSize)}</TableCell>
-                    <TableCell>{formatDate(doc.updateTime)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
+                    <TableCell>
+                      {doc.chunkCount != null && doc.chunkCount > 0 ? (
+                        <span className="tabular-nums">{doc.chunkCount}</span>
+                      ) : (
+                        <span className="text-muted-foreground/50">-</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <ProcessModeCell doc={doc} pipelineMap={pipelineMap} />
+                    </TableCell>
+                    <TableCell>
+                      <RelativeTime value={doc.updateTime} updatedBy={doc.updatedBy} />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {(doc.fileType === "markdown" || doc.fileType === "pdf" || isTableExt(doc.fileType) || isImageType(doc.fileType)) ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handlePreview(doc)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            预览
+                          </Button>
+                        ) : null}
                         <Button
-                          size="icon"
-                          variant="ghost"
+                          size="sm"
+                          variant="outline"
                           onClick={async () => {
                             try {
                               const detail = await getDocument(String(doc.id));
@@ -559,35 +784,42 @@ export function KnowledgeDocumentsPage() {
                               toast.error(getErrorMessage(error, "加载文档详情失败"));
                             }
                           }}
-                          title="编辑"
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Pencil className="h-4 w-4 mr-1" />
+                          编辑
                         </Button>
                         <Button
-                          size="icon"
-                          variant="ghost"
+                          size="sm"
+                          variant="outline"
                           onClick={() => setChunkTarget(doc)}
-                          title="分块"
                         >
-                          <PlayCircle className="h-4 w-4" />
+                          <PlayCircle className="h-4 w-4 mr-1" />
+                          分块
                         </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleOpenChunkLogs(doc)}
-                          title="分块详情"
-                        >
-                          <FileBarChart className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDeleteTarget(doc)}
-                          title="删除"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="icon" variant="ghost" className="h-8 w-8" title="更多">
+                              <MoreHorizontal className="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleDownload(doc)}>
+                              <Download className="mr-2 h-4 w-4" />
+                              下载文件
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleOpenChunkLogs(doc)}>
+                              <FileBarChart className="mr-2 h-4 w-4" />
+                              分块详情
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onClick={() => setDeleteTarget(doc)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              删除
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -650,25 +882,59 @@ export function KnowledgeDocumentsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={Boolean(chunkTarget)} onOpenChange={(open) => (!open ? setChunkTarget(null) : null)}>
+      <AlertDialog open={batchDeleteOpen} onOpenChange={(open) => (!open ? setBatchDeleteOpen(false) : null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{chunkTarget?.chunkCount ? "重新分块？" : "开始分块？"}</AlertDialogTitle>
+            <AlertDialogTitle>确认批量删除？</AlertDialogTitle>
             <AlertDialogDescription>
-              {chunkTarget?.chunkCount ? (
-                <>
-                  文档 [{chunkTarget?.docName}] 已有 {chunkTarget.chunkCount} 个分块记录。
-                  <br />
-                  <span className="font-medium text-amber-600">重新分块会清空原有 Chunk 记录及向量数据。</span>
-                </>
-              ) : (
-                <>文档 [{chunkTarget?.docName}] 将开始分块并写入向量库。</>
-              )}
+              将删除选中的 {selectedIds.size} 个文档，且向量数据会清理。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={handleChunk}>
+            <AlertDialogAction
+              onClick={async () => {
+                setBatchDeleteOpen(false);
+                await handleBatchDelete();
+              }}
+              className="bg-destructive text-destructive-foreground"
+            >
+              删除 {selectedIds.size} 个文档
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={Boolean(chunkTarget)} onOpenChange={(open) => (!open ? setChunkTarget(null) : null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{chunkTarget?.chunkCount ? "重新分块？" : "开始分块？"}</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                {chunkTarget?.chunkCount ? (
+                  <>
+                    <div>文档 [{chunkTarget?.docName}] 已有 {chunkTarget.chunkCount} 个分块记录。</div>
+                    <div className="font-medium text-amber-600">重新分块会清空原有 Chunk 记录及向量数据。</div>
+                    {chunkTarget?.chunksEdited ? (
+                      <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        <span className="font-semibold">注意：</span>
+                        该文档存在被手工编辑过的分块，重新分块会从源文件重新生成，
+                        <span className="font-semibold">所有手动修改将丢失且无法恢复</span>。
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div>文档 [{chunkTarget?.docName}] 将开始分块并写入向量库。</div>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleChunk}
+              className={chunkTarget?.chunksEdited ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : undefined}
+            >
               {chunkTarget?.chunkCount ? "确认" : "开始"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -763,6 +1029,41 @@ export function KnowledgeDocumentsPage() {
 
               {detailProcessMode === "chunk" ? (
                 <div className="space-y-3 rounded-lg border p-3">
+                  {isDetailTable ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      表格按行切分，每块自动重复表头并以「列名: 值」嵌入；按下方预算控制每块大小
+                    </p>
+                    {!isDetailCsv ? (
+                      <div>
+                        <div className="text-sm font-medium mb-2">Excel 解析方式</div>
+                        <Select value={detailConfigValues["excelParser"] ?? "poi"}
+                          onValueChange={val => setDetailConfigValues(v => ({ ...v, excelParser: val }))}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="poi">简单 KeyVal（规整单表，快）</SelectItem>
+                            <SelectItem value="mineru">复杂版面（MinerU，合并/多表/多行表头，较慢）</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <div className="text-sm font-medium mb-2">块大小预算</div>
+                        <Input type="number" value={detailConfigValues["chunkSize"] ?? "512"}
+                          onChange={e => setDetailConfigValues(v => ({ ...v, chunkSize: e.target.value }))} />
+                        <div className="text-sm text-muted-foreground mt-1">每块嵌入文本的字符预算上限</div>
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium mb-2">每块最大行数</div>
+                        <Input type="number" value={detailConfigValues["rowsPerChunk"] ?? "50"}
+                          onChange={e => setDetailConfigValues(v => ({ ...v, rowsPerChunk: e.target.value }))} />
+                        <div className="text-sm text-muted-foreground mt-1">行数硬上限，与预算共同决定切分粒度</div>
+                      </div>
+                    </div>
+                  </div>
+                  ) : (
+                  <>
                   <div>
                     <div className="text-sm font-medium mb-2">分块策略</div>
                     <Select value={detailChunkStrategy} onValueChange={handleDetailStrategyChange}>
@@ -836,6 +1137,8 @@ export function KnowledgeDocumentsPage() {
                       </div>
                     </div>
                   )}
+                  </>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -851,6 +1154,28 @@ export function KnowledgeDocumentsPage() {
               {detailSaving ? "保存中..." : "保存"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(previewTarget)} onOpenChange={(open) => (!open ? setPreviewTarget(null) : null)}>
+        <DialogContent hideClose className={
+          previewTarget?.fileType === "pdf" || isSpreadsheetType(previewTarget?.fileType) || isImageType(previewTarget?.fileType)
+            ? "flex h-[92vh] flex-col overflow-hidden sm:max-w-[1100px] p-0"
+            : "flex max-h-[90vh] flex-col overflow-hidden sm:max-w-[900px] p-0"
+        } onOpenAutoFocus={(e) => e.preventDefault()} onCloseAutoFocus={(e) => { e.preventDefault(); requestAnimationFrame(() => (document.activeElement as HTMLElement)?.blur()); }}>
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-6 py-3">
+            <span className="text-sm font-medium text-muted-foreground truncate">{previewTarget?.docName || "预览"}</span>
+            <DialogClose className="rounded-md p-1.5 opacity-50 transition-all hover:opacity-100 hover:bg-muted focus-visible:outline-none">
+              <X className="h-3.5 w-3.5" />
+            </DialogClose>
+          </div>
+          {previewTarget ? (
+            <DocumentPreview
+              docId={String(previewTarget.id)}
+              fileType={previewTarget.fileType}
+              docName={previewTarget.docName}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
 
@@ -926,9 +1251,9 @@ export function KnowledgeDocumentsPage() {
                   {/* 执行时间 */}
                   <div className="flex items-center gap-2 text-sm text-slate-500">
                     <span>执行时间</span>
-                    <span className="tabular-nums text-slate-700">{formatDate(log.startTime)}</span>
+                    <span className="tabular-nums text-slate-700">{formatFullDateTime(log.startTime)}</span>
                     <span>~</span>
-                    <span className="tabular-nums text-slate-700">{log.endTime ? formatDate(log.endTime) : "进行中"}</span>
+                    <span className="tabular-nums text-slate-700">{log.endTime ? formatFullDateTime(log.endTime) : "进行中"}</span>
                   </div>
 
                   {/* 错误信息 */}
@@ -952,6 +1277,45 @@ export function KnowledgeDocumentsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {selectedIds.size > 0 && (
+        <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center">
+          <div className="animate-fade-up rounded-2xl bg-slate-900 px-5 py-3 text-sm text-white shadow-[0_10px_40px_rgba(0,0,0,0.15)]">
+            <div className="flex items-center gap-3">
+              <Check className="h-4 w-4 text-emerald-400" />
+              <span className="tabular-nums font-medium">
+                已选 {selectedIds.size} 项
+              </span>
+              <div className="mx-1 h-5 w-px bg-white/20" />
+              <button
+                type="button"
+                onClick={handleBatchChunk}
+                disabled={batchOperating}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+              >
+                <PlayCircle className="h-4 w-4" />
+                批量分块
+              </button>
+              <button
+                type="button"
+                onClick={() => setBatchDeleteOpen(true)}
+                disabled={batchOperating}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-red-400 transition-colors hover:bg-white/10 hover:text-red-300 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                删除
+              </button>
+              <div className="mx-1 h-5 w-px bg-white/20" />
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="rounded-lg p-1.5 text-white/50 transition-colors hover:bg-white/10 hover:text-white/80"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -976,7 +1340,10 @@ const uploadSchema = z
     targetChars: z.string().optional(),
     maxChars: z.string().optional(),
     minChars: z.string().optional(),
-    overlapChars: z.string().optional()
+    overlapChars: z.string().optional(),
+    // 表格类专属：每块最大行数 + Excel 解析方式（poi / mineru）
+    rowsPerChunk: z.string().optional(),
+    excelParser: z.string().optional()
   })
   .superRefine((values, ctx) => {
     const isBlank = (value?: string) => !value || value.trim() === "";
@@ -1071,7 +1438,9 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
       targetChars: "1400",
       maxChars: "1800",
       minChars: "600",
-      overlapChars: "0"
+      overlapChars: "0",
+      rowsPerChunk: "50",
+      excelParser: "poi"
     }
   });
 
@@ -1084,6 +1453,10 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
   const isChunkMode = processMode === "chunk";
   const isPipelineMode = processMode === "pipeline";
   const isFixedSize = chunkStrategy === "fixed_size";
+  // 表格类（仅文件来源按扩展名判定）：配置面板切到表格专属项
+  const fileExt = isUrlSource ? "" : extOf(file?.name);
+  const isTableType = isTableExt(fileExt);
+  const isCsv = fileExt === "csv";
 
   const loadPipelines = async () => {
     setLoadingPipelines(true);
@@ -1114,7 +1487,9 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
         targetChars: "1400",
         maxChars: "1800",
         minChars: "600",
-        overlapChars: "0"
+        overlapChars: "0",
+        rowsPerChunk: "50",
+        excelParser: "poi"
       });
       setNoChunk(false);
       setOriginalChunkSize("512");
@@ -1162,6 +1537,13 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
     }
   }, [chunkSize, noChunk]);
 
+  // 表格类强制 fixed_size 载体：chunkStrategy 对表格无意义，固定成 fixed_size 让 chunkSize 作体量预算并通过后端校验
+  useEffect(() => {
+    if (isTableType && chunkStrategy !== "fixed_size") {
+      form.setValue("chunkStrategy", "fixed_size");
+    }
+  }, [isTableType, chunkStrategy, form]);
+
   // 处理"不分块"按钮点击
   const handleNoChunkToggle = () => {
     if (noChunk) {
@@ -1193,27 +1575,40 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
       return;
     }
 
-    // 根据当前策略的 defaultConfig keys 从表单值组装 chunkConfig JSON
+    // 组装 chunkConfig JSON：表格类只发真正生效的参数，其余按策略 defaultConfig keys 组装
     let chunkConfig: string | undefined;
     if (values.processMode === "chunk") {
-      const strategy = chunkStrategies.find((s) => s.value === values.chunkStrategy);
-      if (strategy) {
-        const formAccessors: Record<string, string | undefined> = {
-          chunkSize: values.chunkSize,
-          overlapSize: values.overlapSize,
-          targetChars: values.targetChars,
-          maxChars: values.maxChars,
-          minChars: values.minChars,
-          overlapChars: values.overlapChars
+      if (isTableType) {
+        // fixed_size 载体：chunkSize 作体量预算、overlapSize 占位过校验；rowsPerChunk / excelParser 为 block-aware 自由键
+        const config: Record<string, number | string> = {
+          chunkSize: parseNumber(values.chunkSize) ?? 512,
+          overlapSize: 0,
+          rowsPerChunk: parseNumber(values.rowsPerChunk) ?? 50
         };
-        const config: Record<string, number> = {};
-        for (const key of Object.keys(strategy.defaultConfig)) {
-          const val = parseNumber(formAccessors[key]);
-          if (val !== null) {
-            config[key] = val;
-          }
+        if (!isCsv) {
+          config.excelParser = values.excelParser || "poi";
         }
         chunkConfig = JSON.stringify(config);
+      } else {
+        const strategy = chunkStrategies.find((s) => s.value === values.chunkStrategy);
+        if (strategy) {
+          const formAccessors: Record<string, string | undefined> = {
+            chunkSize: values.chunkSize,
+            overlapSize: values.overlapSize,
+            targetChars: values.targetChars,
+            maxChars: values.maxChars,
+            minChars: values.minChars,
+            overlapChars: values.overlapChars
+          };
+          const config: Record<string, number> = {};
+          for (const key of Object.keys(strategy.defaultConfig)) {
+            const val = parseNumber(formAccessors[key]);
+            if (val !== null) {
+              config[key] = val;
+            }
+          }
+          chunkConfig = JSON.stringify(config);
+        }
       }
     }
 
@@ -1229,7 +1624,10 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
             ? values.scheduleCron.trim()
             : null,
         processMode: values.processMode,
-        chunkStrategy: values.processMode === "chunk" ? values.chunkStrategy : undefined,
+        chunkStrategy:
+          values.processMode === "chunk"
+            ? (isTableType ? "fixed_size" : values.chunkStrategy)
+            : undefined,
         chunkConfig: chunkConfig ?? null,
         pipelineId: values.processMode === "pipeline" ? values.pipelineId : null
       };
@@ -1322,6 +1720,7 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                       ref={fileInputRef}
                       type="file"
                       className="hidden"
+                      accept=".pdf,.md,.markdown,.doc,.docx,.txt,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.svg"
                       onChange={(e) => setFile(e.target.files?.[0] || null)}
                     />
                     {file ? (
@@ -1344,7 +1743,7 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                       <>
                         <FileUp className="h-7 w-7 text-muted-foreground" />
                         <div className="text-sm font-medium">拖拽文件到此处，或点击选择</div>
-                        <div className="text-xs text-muted-foreground">支持 PDF、Markdown、Word、TXT 等格式</div>
+                        <div className="text-xs text-muted-foreground">支持 PDF、Markdown、Word、Excel、TXT、图片(PNG/JPG)等格式</div>
                       </>
                     )}
                   </div>
@@ -1450,6 +1849,67 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
 
               {isChunkMode ? (
                 <div className="space-y-3">
+                  {isTableType ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      表格按行切分，每块自动重复表头并以「列名: 值」嵌入；按下方预算控制每块大小
+                    </p>
+                    {!isCsv ? (
+                      <FormField
+                        control={form.control}
+                        name="excelParser"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">Excel 解析方式</FormLabel>
+                            <Select value={field.value} onValueChange={field.onChange}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="选择解析方式" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="poi">简单 KeyVal（规整单表，快）</SelectItem>
+                                <SelectItem value="mineru">复杂版面（MinerU，合并/多表/多行表头，较慢）</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    ) : null}
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <FormField
+                        control={form.control}
+                        name="chunkSize"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">块大小预算</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormDescription>每块嵌入文本的字符预算上限</FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="rowsPerChunk"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground font-normal">每块最大行数</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormDescription>行数硬上限，与预算共同决定切分粒度</FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                  ) : (
+                  <>
                   <FormField
                     control={form.control}
                     name="chunkStrategy"
@@ -1587,6 +2047,8 @@ function UploadDialog({ open, onOpenChange, onSubmit }: UploadDialogProps) {
                   />
                 </div>
               )}
+                  </>
+                  )}
             </div>
             ) : null}
             </div>

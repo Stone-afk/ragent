@@ -37,6 +37,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -50,6 +51,7 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class BaiLianRerankClient implements RerankClient {
 
+    @Qualifier("syncHttpClient")
     private final OkHttpClient httpClient;
 
     @Override
@@ -158,7 +160,16 @@ public class BaiLianRerankClient implements RerankClient {
                 score = item.get("relevance_score").getAsFloat();
             }
 
-            RetrievedChunk hit = score != null ? new RetrievedChunk(src.getId(), src.getText(), score) : src;
+            RetrievedChunk hit = score != null
+                    ? RetrievedChunk.builder()
+                    .id(src.getId())
+                    .text(src.getText())
+                    .score(score)
+                    .docId(src.getDocId())
+                    .chunkIndex(src.getChunkIndex())
+                    .docName(src.getDocName())
+                    .build()
+                    : src;
             reranked.add(hit);
             addedIds.add(src.getId());
 

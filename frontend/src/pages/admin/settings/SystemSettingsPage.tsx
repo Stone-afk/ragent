@@ -4,7 +4,14 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from "@/components/ui/table";
 import type { SystemSettings } from "@/services/settingsService";
 import { getSystemSettings } from "@/services/settingsService";
 import { getErrorMessage } from "@/utils/error";
@@ -90,8 +97,6 @@ export function SystemSettingsPage() {
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
           <InfoItem label="Enabled" value={<BoolBadge value={rag.queryRewrite.enabled} />} />
-          <InfoItem label="Max History Messages" value={rag.queryRewrite.maxHistoryMessages} />
-          <InfoItem label="Max History Chars" value={rag.queryRewrite.maxHistoryChars} />
         </CardContent>
       </Card>
 
@@ -117,8 +122,10 @@ export function SystemSettingsPage() {
         <CardContent className="grid gap-4 md:grid-cols-3">
           <InfoItem label="History Keep Turns" value={rag.memory.historyKeepTurns} />
           <InfoItem label="Summary Start Turns" value={rag.memory.summaryStartTurns} />
-          <InfoItem label="Summary Enabled" value={<BoolBadge value={rag.memory.summaryEnabled} />} />
-          <InfoItem label="TTL Minutes" value={rag.memory.ttlMinutes} />
+          <InfoItem
+            label="Summary Enabled"
+            value={<BoolBadge value={rag.memory.summaryEnabled} />}
+          />
           <InfoItem label="Summary Max Chars" value={rag.memory.summaryMaxChars} />
           <InfoItem label="Title Max Length" value={rag.memory.titleMaxLength} />
         </CardContent>
@@ -185,35 +192,61 @@ export function SystemSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Chat 模型配置</CardTitle>
-          <CardDescription>默认模型与候选列表</CardDescription>
+          <CardDescription>档位路由与候选注册表</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
-            <InfoItem label="Default Model" value={ai.chat.defaultModel} />
-            <InfoItem label="Deep Thinking Model" value={ai.chat.deepThinkingModel} />
+            <InfoItem label="Default Tier" value={ai.chat.defaultTier ?? "-"} />
+            <InfoItem label="Deep Thinking Tier" value={ai.chat.deepThinkingTier ?? "-"} />
           </div>
-          <Table className="min-w-[720px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[220px]">ID</TableHead>
-                <TableHead className="w-[120px]">Provider</TableHead>
-                <TableHead className="w-[200px]">Model</TableHead>
-                <TableHead className="w-[100px]">Thinking</TableHead>
-                <TableHead className="w-[90px]">Priority</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ai.chat.candidates.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell className="font-medium">{item.id}</TableCell>
-                  <TableCell>{item.provider}</TableCell>
-                  <TableCell>{item.model}</TableCell>
-                  <TableCell>{item.supportsThinking ? "支持" : "-"}</TableCell>
-                  <TableCell>{item.priority}</TableCell>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">档位（Tiers）</div>
+            <Table className="min-w-[560px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[140px]">Tier</TableHead>
+                  <TableHead>候选（有序）</TableHead>
+                  <TableHead className="w-[120px]">Timeout (ms/候选)</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {Object.keys(ai.chat.tiers ?? {}).map((name) => {
+                  const cfg = ai.chat.tiers?.[name];
+                  if (!cfg) return null;
+                  return (
+                    <TableRow key={name}>
+                      <TableCell className="font-medium">{name}</TableCell>
+                      <TableCell>{cfg.candidates?.join(" → ")}</TableCell>
+                      <TableCell>{cfg.timeoutMs ?? "-"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-slate-500">候选注册表（Candidates）</div>
+            <Table className="min-w-[640px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[220px]">ID</TableHead>
+                  <TableHead className="w-[120px]">Provider</TableHead>
+                  <TableHead className="w-[200px]">Model</TableHead>
+                  <TableHead className="w-[100px]">Thinking</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ai.chat.candidates.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-medium">{item.id}</TableCell>
+                    <TableCell>{item.provider}</TableCell>
+                    <TableCell>{item.model}</TableCell>
+                    <TableCell>{item.supportsThinking ? "支持" : "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
 
