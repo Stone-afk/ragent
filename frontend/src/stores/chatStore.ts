@@ -55,6 +55,7 @@ interface ChatState {
   appendThinkingContent: (delta: string) => void;
   submitFeedback: (messageId: string, feedback: FeedbackValue) => Promise<void>;
   toggleSourcesPanel: (messageId: string) => void;
+  openSourcesPanel: (messageId: string) => void;
   closeSourcesPanel: () => void;
   loadRecommended: (messageId: string) => Promise<void>;
   toggleRecommended: (messageId: string) => void;
@@ -226,18 +227,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (error) {
       toast.error((error as Error).message || "加载消息失败");
     } finally {
-      if (get().currentSessionId !== sessionId) {
-        set({ isLoading: false });
-        return;
+      if (get().currentSessionId === sessionId) {
+        set({
+          isLoading: false,
+          isStreaming: false,
+          streamTaskId: null,
+          streamAbort: null,
+          streamingMessageId: null,
+          cancelRequested: false
+        });
       }
-      set({
-        isLoading: false,
-        isStreaming: false,
-        streamTaskId: null,
-        streamAbort: null,
-        streamingMessageId: null,
-        cancelRequested: false
-      });
     }
   },
   updateSessionTitle: (sessionId, title) => {
@@ -572,6 +571,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       openedSourceMessageId: state.openedSourceMessageId === messageId ? null : messageId
     }));
   },
+  openSourcesPanel: (messageId) => set({ openedSourceMessageId: messageId }),
   closeSourcesPanel: () => set({ openedSourceMessageId: null }),
   loadRecommended: async (messageId) => {
     const target = get().messages.find((message) => message.id === messageId);

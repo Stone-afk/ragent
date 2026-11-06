@@ -1,7 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { LoginPage } from "@/pages/LoginPage";
-import { ChatPage } from "@/pages/ChatPage";
+import { EngineGate } from "@/components/common/EngineGate";
 import { ChangeLogsPage } from "@/pages/ChangeLogsPage";
 import { DocPreviewPage } from "@/pages/DocPreviewPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
@@ -21,6 +21,10 @@ import { RagTraceDetailPage } from "@/pages/admin/traces/RagTraceDetailPage";
 import { SystemSettingsPage } from "@/pages/admin/settings/SystemSettingsPage";
 import { SampleQuestionPage } from "@/pages/admin/sample-questions/SampleQuestionPage";
 import { QueryTermMappingPage } from "@/pages/admin/query-term-mapping/QueryTermMappingPage";
+import { AgentProfilePage } from "@/pages/admin/agents/AgentProfilePage";
+import { AgentPromptPage } from "@/pages/admin/agents/AgentPromptPage";
+import { AgentSkillPage } from "@/pages/admin/agent-skills/AgentSkillPage";
+import { AgentSkillEditPage } from "@/pages/admin/agent-skills/AgentSkillEditPage";
 import { UserListPage } from "@/pages/admin/users/UserListPage";
 import { useAuthStore } from "@/stores/authStore";
 
@@ -77,7 +81,7 @@ export const router = createBrowserRouter([
     path: "/chat",
     element: (
       <RequireAuth>
-        <ChatPage />
+        <EngineGate />
       </RequireAuth>
     )
   },
@@ -85,7 +89,7 @@ export const router = createBrowserRouter([
     path: "/chat/:sessionId",
     element: (
       <RequireAuth>
-        <ChatPage />
+        <EngineGate />
       </RequireAuth>
     )
   },
@@ -176,6 +180,22 @@ export const router = createBrowserRouter([
       {
         path: "mappings",
         element: <QueryTermMappingPage />
+      },
+      {
+        path: "agents",
+        element: <AgentProfilePage />
+      },
+      {
+        path: "agents/:agentId",
+        element: <AgentPromptPage />
+      },
+      {
+        path: "agent-skills",
+        element: <AgentSkillPage />
+      },
+      {
+        path: "agent-skills/:skillId",
+        element: <AgentSkillEditPage />
       },
       {
         path: "users",

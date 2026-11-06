@@ -47,3 +47,8 @@ resources/docker/graphrag/.env
 ### Tmp Out ###
 .output/
 docs/temp
+.claude/
+
+### Regression artifacts ###
+# Local reports, credentials, logs, snapshots and compiled CLI classes.
+/resources/regression/*/artifacts/
